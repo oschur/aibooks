@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AIBooks Minimal UI</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: Arial, sans-serif; margin: 24px; background: #121212; color: #e8e8e8; }
+    h1, h2 { margin: 0 0 12px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .card { border: 1px solid #333; border-radius: 8px; padding: 12px; margin-bottom: 12px; background: #1b1b1b; }
+    input, button, textarea { background: #222; color: #e8e8e8; border: 1px solid #444; border-radius: 6px; padding: 8px; }
+    input, textarea { min-width: 240px; }
+    button { cursor: pointer; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #0f0f0f; border: 1px solid #333; padding: 10px; border-radius: 6px; }
+    .muted { color: #b0b0b0; font-size: 12px; }
+    .book { border: 1px solid #333; border-radius: 6px; padding: 8px; margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <h1>AIBooks Minimal Frontend</h1>
+  <p class="muted">Separate frontend, direct calls to backend API.</p>
+
+  <div class="card">
+    <h2>API Config</h2>
+    <div class="row">
+      <input id="apiBase" value="http://127.0.0.1:8080" />
+      <button id="saveApi">Save API URL</button>
+    </div>
+    <p class="muted">Default: http://127.0.0.1:8080</p>
+  </div>
+
+  <div class="card">
+    <h2>Auth</h2>
+    <div class="row">
+      <input id="email" type="email" placeholder="email" />
+      <input id="password" type="password" placeholder="password (>=8 chars)" />
+      <button id="registerBtn">Register</button>
+      <button id="loginBtn">Login</button>
+      <button id="logoutBtn">Logout</button>
+    </div>
+    <p id="authState" class="muted">Not authorized</p>
+  </div>
+
+  <div class="card">
+    <h2>Books</h2>
+    <div class="row">
+      <button id="refreshBooksBtn">Refresh My Books</button>
+    </div>
+    <div id="booksList"></div>
+  </div>
+
+  <div class="card">
+    <h2>Upload PDF</h2>
+    <div class="row">
+      <input id="bookTitle" placeholder="title" />
+      <input id="bookAuthor" placeholder="author" />
+      <input id="bookFile" type="file" accept="application/pdf" />
+      <button id="uploadBtn">Upload</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Search</h2>
+    <div class="row">
+      <input id="searchQuery" placeholder="search query" />
+      <button id="searchBtn">Search</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Output</h2>
+    <pre id="output">{}</pre>
+  </div>
+
+  <script>
+    const state = {
+      apiBase: localStorage.getItem("aibooks.apiBase") || "http://127.0.0.1:8080",
+      token: localStorage.getItem("aibooks.token") || "",
+      userId: localStorage.getItem("aibooks.userId") || "",
+      email: localStorage.getItem("aibooks.email") || ""
+    };
+
+    const $ = (id) => document.getElementById(id);
+    $("apiBase").value = state.apiBase;
+
+    function setOutput(v) {
+      $("output").textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+    }
+
+    function updateAuthState() {
+      if (state.token) {
+        $("authState").textContent = `Authorized: ${state.email} (${state.userId})`;
+      } else {
+        $("authState").textContent = "Not authorized";
+      }
+    }
+
+    async function api(path, options = {}) {
+      const headers = options.headers || {};
+      if (state.token) headers.Authorization = `Bearer ${state.token}`;
+      const res = await fetch(`${state.apiBase}${path}`, { ...options, headers });
+      const text = await res.text();
+      let data = text;
+      try { data = text ? JSON.parse(text) : {}; } catch (_) {}
+      if (!res.ok) throw new Error(typeof data === "string" ? data : JSON.stringify(data));
+      return data;
+    }
+
+    function persistAuth(token, userId, email) {
+      state.token = token || "";
+      state.userId = userId || "";
+      state.email = email || "";
+      localStorage.setItem("aibooks.token", state.token);
+      localStorage.setItem("aibooks.userId", state.userId);
+      localStorage.setItem("aibooks.email", state.email);
+      updateAuthState();
+    }
+
+    function clearAuth() {
+      persistAuth("", "", "");
+    }
+
+    function renderBooks(books) {
+      const root = $("booksList");
+      root.innerHTML = "";
+      if (!books || books.length === 0) {
+        root.textContent = "No books yet.";
+        return;
+      }
+      books.forEach((b) => {
+        const el = document.createElement("div");
+        el.className = "book";
+        el.innerHTML = `
+          <div><b>${b.title || "(no title)"}</b> ${b.author ? "— " + b.author : ""}</div>
+          <div class="muted">book_id: ${b.book_id}</div>
+          <div class="muted">created_at: ${b.created_at}</div>
+          <div class="row" style="margin-top:8px;">
+            <button data-summary="${b.book_id}">Get Summary</button>
+            <button data-delete="${b.book_id}">Delete</button>
+          </div>
+        `;
+        root.appendChild(el);
+      });
+
+      root.querySelectorAll("button[data-summary]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const bookId = btn.getAttribute("data-summary");
+          try {
+            const data = await api(`/books/${bookId}/summary`);
+            setOutput(data);
+          } catch (e) {
+            setOutput(e.message);
+          }
+        });
+      });
+
+      root.querySelectorAll("button[data-delete]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const bookId = btn.getAttribute("data-delete");
+          try {
+            await api(`/books/${bookId}`, { method: "DELETE" });
+            setOutput(`Deleted: ${bookId}`);
+            await refreshBooks();
+          } catch (e) {
+            setOutput(e.message);
+          }
+        });
+      });
+    }
+
+    async function refreshBooks() {
+      try {
+        const data = await api("/books");
+        renderBooks(data.books || []);
+        setOutput(data);
+      } catch (e) {
+        setOutput(e.message);
+      }
+    }
+
+    $("saveApi").addEventListener("click", () => {
+      state.apiBase = $("apiBase").value.trim();
+      localStorage.setItem("aibooks.apiBase", state.apiBase);
+      setOutput(`API URL saved: ${state.apiBase}`);
+    });
+
+    $("registerBtn").addEventListener("click", async () => {
+      try {
+        const body = { email: $("email").value.trim(), password: $("password").value };
+        const data = await api("/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        persistAuth(data.token, data.user_id, data.email);
+        setOutput(data);
+      } catch (e) {
+        setOutput(e.message);
+      }
+    });
+
+    $("loginBtn").addEventListener("click", async () => {
+      try {
+        const body = { email: $("email").value.trim(), password: $("password").value };
+        const data = await api("/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        persistAuth(data.token, data.user_id, data.email);
+        setOutput(data);
+      } catch (e) {
+        setOutput(e.message);
+      }
+    });
+
+    $("logoutBtn").addEventListener("click", () => {
+      clearAuth();
+      setOutput("Logged out");
+    });
+
+    $("refreshBooksBtn").addEventListener("click", refreshBooks);
+
+    $("uploadBtn").addEventListener("click", async () => {
+      try {
+        const file = $("bookFile").files[0];
+        if (!file) throw new Error("Choose PDF file first");
+        const fd = new FormData();
+        fd.append("title", $("bookTitle").value.trim());
+        fd.append("author", $("bookAuthor").value.trim());
+        fd.append("file", file);
+        const data = await api("/books/upload", { method: "POST", body: fd });
+        setOutput(data);
+      } catch (e) {
+        setOutput(e.message);
+      }
+    });
+
+    $("searchBtn").addEventListener("click", async () => {
+      try {
+        const data = await api("/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ q: $("searchQuery").value.trim() })
+        });
+        setOutput(data);
+      } catch (e) {
+        setOutput(e.message);
+      }
+    });
+
+    updateAuthState();
+  </script>
+</body>
+</html>

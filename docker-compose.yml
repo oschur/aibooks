@@ -1,0 +1,125 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aibooks-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aibooks}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - aibooks-postgres-data:/var/lib/postgresql/data
+      - ./migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-aibooks}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: aibooks-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - aibooks-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    # Bitnami moved public images to bitnamilegacy (see bitnami/containers#83267).
+    image: bitnamilegacy/kafka:3.8
+    container_name: aibooks-kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_CFG_NODE_ID: 0
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aibooks-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      AIBOOKS_DB_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-aibooks}?sslmode=disable
+      AIBOOKS_REDIS_ADDR: redis:6379
+      AIBOOKS_EMBEDDING_PROVIDER: ${AIBOOKS_EMBEDDING_PROVIDER:-gigachat}
+      AIBOOKS_EMBEDDING_MODEL: ${AIBOOKS_EMBEDDING_MODEL:-Embeddings}
+      AIBOOKS_LOG_DIR: ${AIBOOKS_LOG_DIR:-logs}
+      AIBOOKS_LOG_KAFKA_BROKERS: ${AIBOOKS_LOG_KAFKA_BROKERS:-kafka:9092}
+      AIBOOKS_LOG_KAFKA_TOPIC: ${AIBOOKS_LOG_KAFKA_TOPIC:-aibooks.logs}
+    volumes:
+      - ./:/app
+      - aibooks-data:/app/data
+      - aibooks-tmp:/app/tmp
+    command: ["go", "run", "./cmd/aibooks-worker"]
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aibooks-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      AIBOOKS_DB_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-aibooks}?sslmode=disable
+      AIBOOKS_REDIS_ADDR: redis:6379
+      AIBOOKS_EMBEDDING_PROVIDER: ${AIBOOKS_EMBEDDING_PROVIDER:-gigachat}
+      AIBOOKS_EMBEDDING_MODEL: ${AIBOOKS_EMBEDDING_MODEL:-Embeddings}
+      AIBOOKS_LOG_DIR: ${AIBOOKS_LOG_DIR:-logs}
+      AIBOOKS_LOG_KAFKA_BROKERS: ${AIBOOKS_LOG_KAFKA_BROKERS:-kafka:9092}
+      AIBOOKS_LOG_KAFKA_TOPIC: ${AIBOOKS_LOG_KAFKA_TOPIC:-aibooks.logs}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./:/app
+      - aibooks-data:/app/data
+      - aibooks-tmp:/app/tmp
+    command: ["go", "run", "./cmd/aibooks-server", "-addr", ":8080"]
+
+volumes:
+  aibooks-postgres-data:
+  aibooks-redis-data:
+  aibooks-data:
+  aibooks-tmp:

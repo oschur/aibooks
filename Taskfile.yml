@@ -1,0 +1,92 @@
+version: "3"
+
+dotenv:
+  - .env
+
+tasks:
+  default:
+    desc: отображение доступных команд
+    cmds:
+      - task --list
+
+  infra:up:
+    desc: запуск postgresql+redis+kafka в docker
+    cmds:
+      - docker compose up -d --wait postgres redis kafka
+
+  infra:down:
+    desc: остановка инфраструктуры в docker
+    cmds:
+      - docker compose down
+
+  infra:reset:
+    desc: остановка инфраструктуры и удаление томов
+    cmds:
+      - docker compose down -v
+
+  infra:logs:
+    desc: отображение логов инфраструктуры из docker
+    cmds:
+      - docker compose logs -f --tail=100
+
+  app:up:
+    desc: запуск сервивов приложения в docker (server + worker)
+    cmds:
+      - docker compose up -d --build worker server
+
+  app:down:
+    desc: остановка сервисов приложения в docker
+    cmds:
+      - docker compose stop worker server
+
+  app:logs:
+    desc: отображение логов приложения из docker
+    cmds:
+      - docker compose logs -f --tail=200 worker server
+
+  db:migrate:
+    desc: применение SQL миграций внутри контейнера postgres
+    cmds:
+      - docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U ${POSTGRES_USER} -d ${POSTGRES_DB} -f /migrations/000001_init.sql
+
+  db:rollback:
+    desc: откат схемы базы данных (удаление всех таблиц приложения)
+    cmds:
+      - docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U ${POSTGRES_USER} -d ${POSTGRES_DB} -f /migrations/000001_init.down.sql
+
+  app:test:
+    desc: запуск тестов
+    cmds:
+      - go test ./...
+
+  app:build:
+    desc: сборка всех пакетов Go
+    cmds:
+      - go build ./...
+
+  app:worker:
+    desc: запуск фонового воркера
+    cmds:
+      - go run ./cmd/aibooks-worker
+
+  app:server:
+    desc: запуск HTTP сервера
+    cmds:
+      - go run ./cmd/aibooks-server
+
+  app:health:
+    desc: вызов health endpoint
+    cmds:
+      - curl http://localhost:8080/healthz
+
+  app:web:
+    desc: запуск фронтенда
+    cmds:
+      - cd web && python -m http.server 5173
+      - open http://localhost:5173
+
+  bootstrap:
+    desc: запуск инфраструктуры и применение миграций
+    cmds:
+      - task infra:up
+      - task db:migrate
